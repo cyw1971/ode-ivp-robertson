@@ -1,0 +1,104 @@
+Week 3 submissions (Tutorial 3: visualization)
+================================================
+Team: 15
+Topic: Robertson kinetics
+
+These texts match Tutorial 3 slides (individual challenge:
+one observation -> one quantitative figure with fitted slope
++/- error, theoretical slope, 95% band) and the usual
+issue-ticket fields (Did / Stuck / What tried / Possible cause).
+
+Reproduce the figure before you post:
+  python code/run_all.py
+Upload: figures/fig04_order_euler_logistic.png
+Optional extra (topic-specific): figures/fig06_order_implicit_robertson.png
+
+
+--------------------------------------------------------------------
+ISSUE TICKET (due Tuesday before Tutorial 3)
+--------------------------------------------------------------------
+
+What I did:
+Produced a log-log global-error plot with np.polyfit(..., cov=True): explicit Euler on the logistic IVP has slope 0.943 ± 0.015 with a 95% band and an order-1 reference line (fig04). On Robertson, implicit Euler vs my BDF oracle has slope 0.990 ± 0.002 (fig06). Also overlaid hλ at t=40, h=0.1 on the three stability regions.
+
+Where I am stuck:
+Adaptive step-doubling on Robertson does change h(t) (h_min=1.25e-2, 749 accepted steps), but at matched y(40) error it uses more RHS evaluations than a tuned fixed h (3680 vs 2424 at e_inf=1.74e-4). I need to write that negative cost result into the report without relabelling it as a speed-up.
+
+What tried (optional):
+Ran python code/run_all.py; printed the Euler/RK4/implicit error tables; compared adaptive tols 5e-5, 2e-6, 5e-7 against fixed h in {0.8,...,0.05}; counted n_rhs from Newton residual evaluations only (Jacobian factorisation not counted).
+
+Possible cause (optional):
+Each accepted adaptive step costs three implicit Euler solves (one coarse, two half-steps), so RHS count is structurally ~3x a fixed grid of similar h. That is the estimator cost, not a bug in the controller.
+
+
+Short two-line backup:
+
+Did: Log-log Euler slope 0.943 ± 0.015 (95% band) and Robertson implicit Euler slope 0.990 ± 0.002 vs my BDF oracle.
+Stuck: Adaptive stepping is more expensive in RHS counts than a good fixed h at the same error; report must say so.
+
+
+--------------------------------------------------------------------
+INDIVIDUAL CHALLENGE (Tutorial 3, 0:10-0:40)
+--------------------------------------------------------------------
+
+Observation I picked (from our Week-2 issue ticket / visualization guide):
+"Convergence evidence was a terminal table; the plot had no fitted slope, no
+error bar, and no 95% band."
+
+What I turned it into:
+One log-log figure: error vs h, theoretical order-1 line, fitted slope
+with standard error, 95% covariance band.
+
+Headline number to post:
+  slope = 0.943 ± 0.015
+  (explicit Euler, logistic y'=y(1-y/10), y0=0.5, T=10,
+   h = 0.4, 0.2, 0.1, 0.05, 0.025)
+
+If the form wants TWO numbers (like Week 2's two h_max fields), use:
+  fitted slope          = 0.943
+  standard error        = 0.015
+
+Topic-specific extra (same recipe on Robertson):
+  slope = 0.990 ± 0.002
+  implicit Euler vs BDF oracle at t=40
+  h = 0.8, 0.4, 0.2, 0.1, 0.05
+
+Figure to upload (before/after):
+  AFTER: figures/fig04_order_euler_logistic.png
+  BEFORE (describe in the text box if there is no file slot):
+    a five-row error table with no slope, no band, no reference line.
+
+Caption you can paste:
+"Explicit Euler on the logistic equation: log-log global error at T=10
+versus step size h. Black dashed: order-1 reference. Orange dashed:
+least-squares fit slope 0.943 ± 0.015. Shaded: 95% band from polyfit
+covariance. This is a deterministic fit diagnostic, not a Monte-Carlo
+interval."
+
+Error table (so you can defend the slope in class):
+  h      error
+  0.40   5.786627e-03
+  0.20   3.202642e-03
+  0.10   1.667511e-03
+  0.05   8.489676e-04
+  0.025  4.281250e-04
+
+RK4 on the same problem (second required order, for the report not the challenge):
+  slope = 4.075 ± 0.018
+
+
+--------------------------------------------------------------------
+TEAM FORUM / WEEKLY MILESTONE (PM, if asked)
+--------------------------------------------------------------------
+
+What we completed:
+Robertson implicit Euler + Newton + oracle; Week-3 figure with slope
+0.943 ± 0.015 (95% band); stiffness ratio S(40)=1.58e5 computed from
+our Jacobian; adaptive h(t) implemented.
+
+What we plan next:
+Write the cost-accuracy section honestly (adaptive uses more RHS);
+fill names/ICS; freeze run_all.py for the report.
+
+Current blocker:
+Title-page names/IDs and four remaining ICS paragraphs.

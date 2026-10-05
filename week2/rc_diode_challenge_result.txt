@@ -1,0 +1,14 @@
+first_step_full_iters=21
+first_step_damped_iters=6
+h_max_full_ms=0.2
+h_max_damped_ms=20.0
+table:
+  h=0.1 ms  full_maxit=6  damped_maxit=5  full_ok=True  damped_ok=True  full_le10=True  damped_le10=True
+  h=0.2 ms  full_maxit=9  damped_maxit=5  full_ok=True  damped_ok=True  full_le10=True  damped_le10=True
+  h=0.4 ms  full_maxit=14  damped_maxit=6  full_ok=True  damped_ok=True  full_le10=False  damped_le10=True
+  h=0.8 ms  full_maxit=14  damped_maxit=7  full_ok=True  damped_ok=True  full_le10=False  damped_le10=True
+  h=1.0 ms  full_maxit=21  damped_maxit=6  full_ok=True  damped_ok=True  full_le10=False  damped_le10=True
+  h=2.0 ms  full_maxit=53  damped_maxit=5  full_ok=True  damped_ok=True  full_le10=False  damped_le10=True
+  h=4.0 ms  full_maxit=89  damped_maxit=8  full_ok=True  damped_ok=True  full_le10=False  damped_le10=True
+  h=8.0 ms  full_maxit=121  damped_maxit=8  full_ok=True  damped_ok=True  full_le10=False  damped_le10=True
+  h=20.0 ms  full_maxit=150  damped_maxit=8  full_ok=True  damped_ok=True  full_le10=False  damped_le10=True
