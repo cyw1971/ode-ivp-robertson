@@ -1,0 +1,513 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.2cm]{geometry}
+\usepackage{amsmath,amssymb,bm}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+\usepackage{setspace}
+\setstretch{1.07}
+
+\newcommand{\figdir}{figures}
+
+\title{\textbf{Numerical Solution of the Robertson Kinetics IVP}\\[0.4em]
+\large Project 1 (ODE IVP) Report}
+\author{Chuyang Wang, 2363591\\[0.3em]
+\small Sole author (solo submission; all roles)}
+\date{Department of Applied Mathematics\\ 5 October 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+I treat the Robertson chemical-kinetics initial-value problem as a stiff three-species ODE on \(0\le t\le 40\). The vector field conserves mass, \(y_1+y_2+y_3=1\), and the Jacobian always has a structural zero eigenvalue; the physically meaningful stiffness ratio, formed from the two nonzero eigenvalues, grows to \(S(40)=1.58\times 10^5\). I implement explicit Euler, classical RK4, and implicit Euler with Newton's method, plus a step-doubling adaptive controller. Orders are measured against a closed-form logistic solution (Euler \(0.943\pm 0.015\), RK4 \(4.075\pm 0.018\)) and, on Robertson, against a tightened BDF/Radau oracle (implicit Euler \(0.990\pm 0.002\)). Explicit Euler at \(h=0.01\) diverges, consistent with the frozen-Jacobian bound \(h<5.90\times 10^{-4}\). Adaptive stepping does change \(h(t)\), but at matched \(y(40)\) error it spends more right-hand-side evaluations than a tuned fixed step, because each accepted step costs three implicit Euler solves. The main limitation is that \(h\lambda\) overlays remain local diagnostics, not nonlinear stability proofs. A-stability of the time step, a small Newton residual, and a small mass defect are three different claims and are checked separately.
+\end{abstract}
+
+\noindent\textbf{Keywords:} implicit Euler, Newton iteration, stiffness, absolute stability, A-stability, step-doubling, Robertson problem
+
+\tableofcontents
+
+%----------------------------------------------------------------------
+\section{Introduction and Motivation}
+\subsection{Problem Background}
+Robertson's 1966 three-species mechanism is the standard stiff test that exposes the gap between accuracy and absolute stability~\cite{robertson1966,hairer1996}. The rate constants span eight orders of magnitude, so an explicit method that looks ``accurate enough'' on a smooth scalar problem still has to resolve the fastest Jacobian mode. I chose this topic (Problem Pack~\textcircled{3}) because the model, the linear invariant, and the Week-2 scaffold already force the implicit-plus-Newton pathway the course asks me to own, rather than a conservative mechanics problem whose difficulty is geometric rather than stiff. This report is a solo submission: I derived the schemes, wrote the solvers, ran the experiments, and typeset the text.
+
+\subsection{Mathematical Model}
+The IVP is
+\begin{equation}
+\dot y = f(y),\qquad
+y(0)=(1,0,0)^\top,\qquad 0\le t\le 40,
+\end{equation}
+with mass-action kinetics (the factor of two in \(B+B\) is already absorbed in the displayed \(3\times 10^7 y_2^2\) term~\cite{problemPack})
+\begin{equation}
+\begin{aligned}
+\dot y_1 &= -0.04\, y_1 + 10^4 y_2 y_3,\\
+\dot y_2 &= 0.04\, y_1 - 10^4 y_2 y_3 - 3\times 10^7 y_2^2,\\
+\dot y_3 &= 3\times 10^7 y_2^2.
+\end{aligned}
+\label{eq:rhs}
+\end{equation}
+The identity \(1^\top f(y)=0\) implies that every exact trajectory remains on the plane \(y_1+y_2+y_3=1\). Consequently \(J_f=\partial f/\partial y\) always has a zero eigenvalue. I define the stiffness ratio from the two nonzero eigenvalues,
+\begin{equation}
+S(t)=\frac{\max_{\lambda\neq 0}|\operatorname{Re}\lambda(t)|}{\min_{\lambda\neq 0}|\operatorname{Re}\lambda(t)|},
+\end{equation}
+using the numerical cutoff \(|\lambda|<10^{-8}\) to classify a computed eigenvalue as the structural zero. Along the BDF reference I built, \(S(40)=1.584\times 10^5\) and \(\lambda_{\min}(40)\approx -3.393\times 10^3\).
+
+\subsection{Overview of the Report}
+Section~\ref{sec:analysis} derives the three one-step methods, their stability functions, and the Newton equation. Section~\ref{sec:impl} records the implementation choices. Section~\ref{sec:exp} builds an independent oracle, measures orders with a fitted slope \(\pm\mathrm{SE}\) and a pointwise fitted-mean band (not a 95\% confidence interval for \(p\)), tests the frozen-Jacobian stability prediction, reports conservation, positivity and full-state error separately, shows that the adaptive mesh actually moves with local error near \(\mathrm{tol}\), and compares cost at matched accuracy. Section~\ref{sec:conc} states what I trust and what I do not.
+
+%----------------------------------------------------------------------
+\section{Discretisation and Analysis}
+\label{sec:analysis}
+\subsection{Discrete Schemes}
+A one-step method is \(y_{n+1}=y_n+h\,\Phi(t_n,y_n,h)\). Explicit Euler uses \(\Phi=f(t_n,y_n)\):
+\begin{equation}
+y_{n+1}=y_n+h f(t_n,y_n).
+\label{eq:euler}
+\end{equation}
+Classical RK4 cancels Taylor terms through order four by four stages~\cite{butcher2016,hairer1993}:
+\begin{equation}
+\begin{aligned}
+k_1 &= f(t_n,y_n),\\
+k_2 &= f(t_n+h/2,\, y_n+(h/2)k_1),\\
+k_3 &= f(t_n+h/2,\, y_n+(h/2)k_2),\\
+k_4 &= f(t_n+h,\, y_n+h k_3),\\
+y_{n+1} &= y_n+\frac{h}{6}(k_1+2k_2+2k_3+k_4).
+\end{aligned}
+\label{eq:rk4}
+\end{equation}
+Implicit Euler evaluates the vector field at the unknown new state,
+\begin{equation}
+y_{n+1}=y_n+h f(t_{n+1},y_{n+1}).
+\label{eq:ie}
+\end{equation}
+The unknown sits inside \(f\), so each step is a nonlinear system
+\begin{equation}
+F(w)=w-y_n-h f(t_{n+1},w)=0,\qquad
+J_F(w)=I-h J_f(t_{n+1},w).
+\label{eq:newton}
+\end{equation}
+Newton's iteration is \(J_F(w^{(k)})\delta=F(w^{(k)})\), \(w\leftarrow w-\delta\), started from \(w^{(0)}=y_n\), stopped at \(\|F\|_\infty<10^{-12}\).
+
+\subsection{Consistency and Truncation Error}
+\label{sec:lte}
+If \(f\) is \(C^{p+1}\), a method of order \(p\) has local defect \(\mathcal{O}(h^{p+1})\) and, under a Lipschitz bound, global error \(\mathcal{O}(h^p)\) on a fixed interval. Explicit and implicit Euler have \(p=1\); RK4 has \(p=4\). The step must also lie in the absolute-stability region: outside it the recurrence is not a perturbation of the ODE and a slope plot is meaningless.
+
+The Tutorial~3 supplement records the implicit-Euler argument that I use here~\cite{tutorial3supp}. Write \(u_n=y(t_n)\) for the exact IVP and \(y_n\) for the numerical values, with exact Newton solves and \(e_n=y_n-u_n\), \(e_0=0\). Taylor expansion of \(u\) \emph{backwards} from \(t_{n+1}\) (where implicit Euler evaluates the slope) gives
+\begin{equation}
+u_{n+1}=u_n+h f(u_{n+1})+d_{n+1},\qquad
+d_{n+1}=-\tfrac12 h^2 y''(t_{n+1})+\mathcal{O}(h^3).
+\end{equation}
+Thus one exact step leaves an \(\mathcal{O}(h^2)\) defect (local truncation \(d_{n+1}/h=\mathcal{O}(h)\)). Subtracting from \(y_{n+1}=y_n+hf(y_{n+1})\) and using \(\|f(a)-f(b)\|\le L\|a-b\|\) produces
+\begin{equation}
+(1-hL)\|e_{n+1}\|\le \|e_n\|+Ch^2.
+\end{equation}
+Over \(N=T/h\) steps the defects accumulate; for \(hL\le 1/2\) the amplification stays bounded by a constant depending only on \(L\) and \(T\), so \(\|e_N\|\le CTe^{2LT}h=\mathcal{O}(h)\). One-step \(\mathcal{O}(h^2)\) times \(T/h\) steps is why the global order is one, not two. I do not claim this Lipschitz argument on the whole of \(\mathbb{R}^3\); it holds in a neighbourhood of the mass simplex where the computed Robertson trajectory stays.
+
+\subsection{Stability Analysis}
+\label{sec:stab}
+On the Dahlquist test equation \(y'=\lambda y\) one has \(y_{n+1}=R(z)y_n\) with \(z=h\lambda\). The absolute-stability region is \(S=\{z:|R(z)|\le 1\}\). Direct substitution gives
+\begin{equation}
+R_{\mathrm{E}}(z)=1+z,\qquad
+R_{\mathrm{RK4}}(z)=1+z+\frac{z^2}{2}+\frac{z^3}{6}+\frac{z^4}{24},\qquad
+R_{\mathrm{IE}}(z)=\frac{1}{1-z}.
+\label{eq:R}
+\end{equation}
+A method is \emph{A-stable} if \(\{\operatorname{Re}z<0\}\subset S\). Implicit Euler is A-stable (and L-stable, since \(R(z)\to 0\) as \(z\to\infty\)). Explicit Euler's region is the disk of radius \(1\) centred at \(-1\); RK4's region is larger but still bounded. For a real negative eigenvalue, explicit Euler therefore needs \(0<h\le 2/|\lambda|\).
+
+At \(t=40\) on the oracle, \(\lambda_{\mathrm{fast}}\approx -3.393\times 10^3\), so the frozen-Jacobian explicit-Euler restriction is \(h<5.90\times 10^{-4}\). Overlaying \(z=h\lambda_j\) with the working implicit step \(h=0.1\) places the fast mode at \(z\approx -339\), far to the left of both explicit regions and well inside the implicit half-plane. This overlay is a \emph{local frozen-Jacobian diagnostic}, not a nonlinear stability theorem~\cite{hairer1996}: \(J_f\) varies along the trajectory, and non-normality can enlarge transients. I therefore also run an empirical step sweep (Section~\ref{sec:stabexp}).
+
+\subsection{Convergence}
+On a Lipschitz IVP, consistency of order \(p\) plus zero-stability (satisfied by all three one-step methods) implies convergence of order \(p\) for sufficiently small \(h\)---the ODE form of Lax equivalence. Robertson's polynomial nonlinearity is locally Lipschitz, so the hypotheses hold in a neighbourhood of the positive mass plane. The numerical job is to check that the observed log-log slope matches \(p\) \emph{after} \(h\) has entered the stability region.
+
+%----------------------------------------------------------------------
+\section{Implementation}
+\label{sec:impl}
+\subsection{Algorithm}
+
+\begin{algorithm}[H]
+\caption{Implicit Euler step by Newton. Tolerance \(\mathrm{tol}=10^{-12}\).}
+\label{alg:newton}
+\begin{algorithmic}[1]
+\Procedure{NewtonIE}{$f,J_f,y_n,t_{n+1},h,\mathrm{tol}$}
+  \State \(w \gets y_n\)
+  \For{\(\mathrm{iter}=0,\dots,\mathrm{maxiter}\)}
+    \State \(F \gets w - y_n - h\cdot f(t_{n+1},w)\)
+    \If{\(\|F\|_\infty < \mathrm{tol}\)}
+      \State \Return \(w\)
+    \EndIf
+    \State \(J_F \gets I - h\cdot J_f(t_{n+1},w)\)
+    \State \(\delta \gets J_F^{-1} F\)
+    \State \(w \gets w - \delta\)
+  \EndFor
+\EndProcedure
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[H]
+\caption{Step-doubling adaptive implicit Euler.}
+\label{alg:adapt}
+\begin{algorithmic}[1]
+\Procedure{AdaptiveIE}{$f,J_f,y_0,t_0,t_1,h_0,\mathrm{tol}$}
+  \State \(t \gets t_0,\quad y \gets y_0,\quad h \gets h_0\)
+  \While{\(t < t_1\)}
+    \State \(h \gets \min(h,t_1-t,h_0)\)
+    \State \(y_{\mathrm{coarse}} \gets \) one implicit Euler step of size \(h\)
+    \State \(y_{\mathrm{fine}} \gets \) two implicit Euler steps of size \(h/2\)
+    \State \(e \gets \|y_{\mathrm{fine}}-y_{\mathrm{coarse}}\|_\infty\)
+    \If{\(e \le \mathrm{tol}\)}
+      \State accept \(y_{\mathrm{fine}}\); \(t \gets t+h\)
+      \If{\(e < \mathrm{tol}/10\)} \(h \gets \min(2h,h_0)\) \EndIf
+    \Else
+      \State \(h \gets h/2\) \Comment{reject; do not advance \(t\)}
+    \EndIf
+  \EndWhile
+\EndProcedure
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Code Structure}
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+\toprule
+File & Purpose\\
+\midrule
+\texttt{code/model.py} & \(f(t,y)\) and \(J_f\) for Robertson; logistic test problem\\
+\texttt{code/methods.py} & Euler, RK4, implicit Euler+Newton, step-doubling\\
+\texttt{code/plots.py} & log-log fits with \(\mathtt{cov=True}\) and a fitted-mean \(\pm 1.96\,\mathrm{SE}\) band\\
+\texttt{code/run\_all.py} & regenerates every report figure\\
+\texttt{code/validation\_tests.py} & PASS/FAIL: orders, mass, oracle, Jacobian\\
+\bottomrule
+\end{tabular}
+\end{center}
+The time-steppers take callables \(f\) and \(J_f\); swapping the model does not touch the integrator. I implement Euler, RK4, and Newton myself. The only library solve of the IVP is the oracle \(\mathtt{scipy.integrate.solve\_ivp}\) (BDF/Radau), used as a reference, not as the method under test~\cite{scipy2020}.
+
+\subsection{Key Design Decisions}
+Newton's initial guess is the previous step \(y_n\), not an explicit Euler predictor. On the first Robertson step this guess is degenerate (\(y_2=0\)), so \(\|F\|_\infty\) rises from \(4.0\times 10^{-3}\) to \(4.8\times 10^{1}\) before quadratic decay to \(5.6\times 10^{-17}\) in twelve iterations---a feature of the basin, not a wrong Jacobian. The analytic Jacobian is cross-checked by central differences (\(\max|J_{\mathrm{an}}-J_{\mathrm{FD}}|=3.2\times 10^{-12}\) at a generic state) and by the invariant test that every column of \(J_f\) sums to zero. The adaptive error signal is the method's own \(O(h^2)\) difference \(e=\|y_{\mathrm{fine}}-y_{\mathrm{coarse}}\|_\infty\); I accept \(y_{\mathrm{fine}}\).
+
+%----------------------------------------------------------------------
+\section{Numerical Experiments}
+\label{sec:exp}
+\subsection{Verification: oracle and manufactured/exact cases}
+\label{sec:oracle}
+There is no closed form for~\eqref{eq:rhs}. I built two independent tight-tolerance oracles,
+\[
+\texttt{solve\_ivp}(\cdot,\ \mathtt{method='BDF'},\ \mathtt{rtol=10^{-12}}),\qquad
+\texttt{method='Radau'},\ \mathtt{rtol=10^{-13}},
+\]
+and retained digits unchanged by that tightening. SciPy's \texttt{Radau} is three-stage Radau~IIA (global order 5); one-stage Radau~IIA is exactly implicit Euler~\cite{radauhandout}. I use the high-order code only as a checked reference, not as a method I claim to have implemented. At \(t=40\),
+\begin{equation}
+y_{\mathrm{oracle}}(40)=(0.71582707,\ 9.185535\times 10^{-6},\ 0.28416375),
+\end{equation}
+with \(\|y_{\mathrm{BDF}}-y_{\mathrm{Radau}}\|_\infty=1.4\times 10^{-11}\). This agrees with the problem-pack orientation value to all digits they print. These comparisons are empirical reference checks, not rigorous error bounds~\cite{tutorial3supp}. The logistic equation \(y'=y(1-y/10)\), \(y(0)=0.5\), supplies an exact scalar check for the explicit methods.
+
+\paragraph{Logistic orders (Week-3 individual-challenge figure).}
+Table~\ref{tab:log} and Figure~\ref{fig:eulerband} report global error at \(T=10\). \(\mathtt{np.polyfit}(\log h,\log e,1,\mathtt{cov=True})\) gives the slope and one standard error. The shaded band is the pointwise fitted mean \(\pm 1.96\,\mathrm{SE}(x)\) on a deterministic table: a fit diagnostic, not a 95\% confidence interval for the order \(p\), and not a Monte-Carlo interval.
+
+\begin{table}[ht]
+\centering
+\caption{Global error at \(T=10\) on the logistic equation. Ratios are \(e(h)/e(h/2)\).}
+\label{tab:log}
+\begin{tabular}{@{}rrrrr@{}}
+\toprule
+\(h\) & Euler error & Euler ratio & RK4 error & RK4 ratio\\
+\midrule
+0.40 & \(5.787\times 10^{-3}\) & --- & \(1.407\times 10^{-5}\) & ---\\
+0.20 & \(3.203\times 10^{-3}\) & 1.81 & \(7.793\times 10^{-7}\) & 18.1\\
+0.10 & \(1.668\times 10^{-3}\) & 1.92 & \(4.604\times 10^{-8}\) & 16.9\\
+0.05 & \(8.490\times 10^{-4}\) & 1.96 & \(2.801\times 10^{-9}\) & 16.4\\
+0.025 & \(4.281\times 10^{-4}\) & 1.98 & \(1.727\times 10^{-10}\) & 16.2\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Fitted slopes: Euler \(0.943\pm 0.015\) (theory \(1\)), RK4 \(4.075\pm 0.018\) (theory \(4\)). The Euler slope sits slightly below \(1\) because the coarsest \(h=0.4\) is not yet in the asymptotic regime. There is no sharp numerical test for that regime~\cite{zhang2026tickets}: in practice one reports that \(h\) has entered it once adjacent observed orders settle to a constant for sufficiently small \(h\). Here the Euler ratios \(1.81\to 1.92\to 1.96\to 1.98\) do that. The shaded band on Figure~\ref{fig:eulerband} is that same fitted-mean diagnostic; for this noise-free error it is expected to be narrow~\cite{zhang2026tickets}. RK4's successive ratios approach \(16=2^4\).
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.82\textwidth]{\figdir/fig04_order_euler_logistic.png}
+\caption{Week-3 figure. Explicit Euler on the logistic equation: log-log global error versus \(h\), theoretical order-\(1\) line, and OLS fit \(0.943\pm 0.015\). Following the Tutorial~3 supplement~\cite{tutorial3supp}, \(p\pm\mathrm{SE}\) is \emph{one} standard error, not a 95\% interval for \(p\); the shaded region is a pointwise fitted-mean \(\pm 1.96\,\mathrm{SE}\) diagnostic on a deterministic table (no Monte-Carlo noise). The arrow marks the smallest tabulated error, not a double-precision floor.}
+\label{fig:eulerband}
+\end{figure}
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.82\textwidth]{\figdir/fig05_order_rk4_logistic.png}
+\caption{RK4 on the same logistic IVP. Observed order \(4.075\pm 0.018\) with the order-\(4\) reference overlaid. This is the second required order measurement; it uses the closed-form solution, not the Robertson oracle.}
+\label{fig:rk4}
+\end{figure}
+
+\paragraph{Implicit Euler on Robertson.}
+Against \(y_{\mathrm{oracle}}(40)\), Table~\ref{tab:rob} and Figure~\ref{fig:ieorder} give
+\[
+\text{slope }=0.990\pm 0.002.
+\]
+At the working step \(h=0.1\),
+\[
+y_{\mathrm{IE}}(40)=(0.716175,\ 9.199\times 10^{-6},\ 0.283816),
+\]
+with componentwise relative errors \(0.049\%\), \(0.147\%\), \(0.122\%\) (all \(<1\%\)). Following the problem pack~\cite{problemPack,feedbackslides} I keep three diagnostics apart: conservation, positivity, and full-state error. Mass defect \(\max_n|1^\top y_n-1|=4.4\times 10^{-16}\) at \(h=0.1\). After \(t=0\), \(\min y_2=9.199\times 10^{-6}>0\) at the same \(h\); Table~\ref{tab:rob} records \(\min_{t>0}y_2\) for every tabulated step. Conservation alone is a weak test: an inaccurate or even negative vector can still sum to one. Accuracy is the oracle comparison \(E(h)\), reported in the \(\infty\)-norm and also componentwise because \(y_2\) is \(\mathcal{O}(10^{-5})\).
+
+\paragraph{Three different errors.}
+Following the Tutorial~3 error budget~\cite{tutorial3supp} and the issue-ticket feedback~\cite{feedbackslides,zhang2026tickets}, write \(\hat y_h\) for the computed implicit-Euler trajectory, \(y_h\) for the same method with exact Newton solves, \(y\) for the true IVP, and \(y_{\mathrm{ref}}\) for the oracle. Then
+\begin{equation}
+\|\hat y_h-y_{\mathrm{ref}}\|
+\le
+\underbrace{\|y_h-y\|}_{\text{time discretisation}}
++\underbrace{\|\hat y_h-y_h\|}_{\text{Newton}}
++\underbrace{\|y-y_{\mathrm{ref}}\|}_{\text{reference}}.
+\end{equation}
+A small Newton residual alone does not prove ODE accuracy. Time-step stability is \(|R(h\lambda)|\le 1\) plus a step sweep; the nonlinear solve is evidenced by \(F\) and solver status; trajectory accuracy is \(\|y_h-y_{\mathrm{ref}}\|\). Implicit Euler can be A-stable and still inaccurate: for \(y'=-y\), \(y(0)=1\), \(h=1\) the step is stable and solved exactly, yet the error is \(0.132\). The residual is computable; \(\|w-w_\star\|\) is only roughly bounded by \(\|J_F^{-1}\|\,\|F\|\). On the first Robertson step the residual rises from \(4.0\times 10^{-3}\) to \(4.8\times 10^{1}\) before decaying: \(y_2=0\) kills \(\partial_y(3\times 10^7 y_2^2)\), then the trial value activates it. That spike is not divergence. Solver convergence (Newton iterations staying small) and grid convergence (\(E(h)\) still changing) answer different questions~\cite{tutorial3supp}.
+
+\paragraph{Newton tolerance versus time discretisation.}
+Classroom feedback asked for a numerical check that the iteration error sits below the discretisation error, not only a residual sentence~\cite{feedbackslides,zhang2026tickets}. Table~\ref{tab:newton} therefore freezes \(h=0.1\) and varies only the Newton stopping tolerance. Tightening from \(10^{-8}\) to \(10^{-12}\) changes the accepted \(y(40)\) by
+\[
+\|y(40;10^{-8})-y(40;10^{-12})\|_\infty=2.21\times 10^{-7},
+\]
+which is \(6.3\times 10^{-4}\) times the time-discretisation error \(E(0.1)=3.48\times 10^{-4}\) in Table~\ref{tab:rob}. Even a deliberately loose tolerance \(10^{-4}\) moves \(y(40)\) by only \(4.59\times 10^{-6}\), still two orders below \(E(0.1)\). I therefore keep \(\|F\|_\infty<10^{-12}\) as the production tolerance: the middle term of the error budget is negligible next to the \(\mathcal{O}(h)\) column. Tightening the BDF/Radau oracle by \(100\times\) changed \(y(40)\) by only \(1.4\times 10^{-11}\), so the reference term is smaller still.
+
+\begin{table}[ht]
+\centering
+\caption{Newton tolerance sweep at fixed \(h=0.1\). \(\Delta y\) is the \(\infty\)-norm difference against the \(10^{-12}\) run; \(E\) is the same comparison against the BDF oracle. Iteration error is the \(\Delta y\) column; discretisation error is the \(E\) column.}
+\label{tab:newton}
+\begin{tabular}{@{}rrrrr@{}}
+\toprule
+Newton \(\mathrm{tol}\) & \(\|y(40)-y(40;10^{-12})\|_\infty\) & \(E(0.1)\) vs oracle & RHS evaluations\\
+\midrule
+\(10^{-4}\) & \(4.590\times 10^{-6}\) & \(3.525\times 10^{-4}\) & 809\\
+\(10^{-6}\) & \(3.151\times 10^{-6}\) & \(3.511\times 10^{-4}\) & 822\\
+\(10^{-8}\) & \(2.209\times 10^{-7}\) & \(3.481\times 10^{-4}\) & 1023\\
+\(10^{-10}\) & \(3.670\times 10^{-12}\) & \(3.479\times 10^{-4}\) & 1210\\
+\(10^{-12}\) & \(0\) & \(3.479\times 10^{-4}\) & 1257\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[ht]
+\centering
+\caption{Implicit Euler on Robertson. Full-state error \(E(h)=\|y(40)-y_{\mathrm{oracle}}\|_\infty\) is separate from positivity \(\min_{t>0}y_2\) (the IVP has \(y_2(0)=0\)). Adjacent observed order \(p_{\mathrm{pair}}=\log(E(h)/E(h/2))/\log 2\)~\cite{tutorial3supp}. Cost is RHS evaluations; Jacobian factorisation is not counted. Newton converges on every row, while \(E(h)\) still halves: solver convergence is not grid convergence.}
+\label{tab:rob}
+\begin{tabular}{@{}rrrrrr@{}}
+\toprule
+\(h\) & \(E(h)\) & ratio & \(p_{\mathrm{pair}}\) & \(\min_{t>0}y_2\) & RHS\\
+\midrule
+0.80 & \(2.711\times 10^{-3}\) & --- & --- & \(9.292\times 10^{-6}\) & 213\\
+0.40 & \(1.375\times 10^{-3}\) & 1.97 & 0.98 & \(9.239\times 10^{-6}\) & 378\\
+0.20 & \(6.930\times 10^{-4}\) & 1.98 & 0.99 & \(9.213\times 10^{-6}\) & 671\\
+0.10 & \(3.479\times 10^{-4}\) & 1.99 & 0.99 & \(9.199\times 10^{-6}\) & 1257\\
+0.05 & \(1.743\times 10^{-4}\) & 2.00 & 1.00 & \(9.192\times 10^{-6}\) & 2424\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.82\textwidth]{\figdir/fig06_order_implicit_robertson.png}
+\caption{Implicit Euler on Robertson versus the BDF/Radau oracle. OLS slope \(0.990\pm 0.002\) (one standard error). The band is a deterministic fit diagnostic; \(p_{\mathrm{pair}}\) in Table~\ref{tab:rob} has already settled near \(1\), which is the practical test for the asymptotic regime.}
+\label{fig:ieorder}
+\end{figure}
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.88\textwidth]{\figdir/fig01_robertson_trajectory.png}
+\caption{Robertson trajectory with implicit Euler, \(h=0.1\), logarithmic time. \(y_2\) is scaled by \(10^4\). Dotted lines mark the oracle terminal values of \(y_1\) and \(y_3\). The plot shows that a stable first-order method tracks the slow drift; it does not by itself prove the order (that is Figure~\ref{fig:ieorder}).}
+\label{fig:traj}
+\end{figure}
+
+\subsection{Stability experiments}
+\label{sec:stabexp}
+Figure~\ref{fig:eigs} shows the three real parts of \(\mathrm{eig}(J_f(y(t)))\) along the oracle. One eigenvalue stays at machine zero; one slow mode remains \(O(10^{-2})\); the fast mode grows to \(-3.39\times 10^3\). Figure~\ref{fig:S} plots \(S(t)\) from the first positive logarithmic time (the initial state \(y_2=0\) is degenerate). At \(t=40\), \(S=1.584\times 10^5\).
+
+The frozen-Jacobian bound for explicit Euler is \(h<5.90\times 10^{-4}\), i.e.\ \(\sim 6.8\times 10^4\) steps on \([0,40]\). Running \(h=0.01\) (only \(4\times 10^3\) steps) already produces \(\mathrm{inf}/\mathrm{NaN}\) (Figure~\ref{fig:blow}). This is a stability failure, not an accuracy failure: the true solution stays on the mass simplex. Figure~\ref{fig:stabreg} overlays \(h\lambda_j\) at \(t=40\) with \(h=0.1\). The fast mode lies far outside both explicit regions and inside the implicit half-plane, matching the blow-up experiment. I do not claim this overlay proves nonlinear stability; the experiment does.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.82\textwidth]{\figdir/fig10_eigenvalues.png}
+\caption{Real parts of the Robertson Jacobian along the BDF interpolant. The structural zero is a conservation identity, not a dynamical mode, and is excluded from \(S(t)\).}
+\label{fig:eigs}
+\end{figure}
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.82\textwidth]{\figdir/fig11_stiffness.png}
+\caption{Nonzero-eigenvalue stiffness ratio versus logarithmic time. \(S(40)=1.58\times 10^5\) is computed from the oracle I built, not copied from the problem pack.}
+\label{fig:S}
+\end{figure}
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.98\textwidth]{\figdir/fig03_stability_regions.png}
+\caption{Absolute-stability regions of Euler, RK4, and implicit Euler. Red crosses: \(h\lambda_j\) at \(t=40\) with the implicit working step \(h=0.1\). Points outside an explicit region are a warning, confirmed by Figure~\ref{fig:blow}; points inside the implicit region are not a nonlinear proof.}
+\label{fig:stabreg}
+\end{figure}
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.82\textwidth]{\figdir/fig07_explicit_blowup.png}
+\caption{Explicit Euler, \(h=0.01\), \(T=40\): the trajectory leaves the floating-point range. The same \(h\) is two orders of magnitude larger than \(2/|\lambda|_{\max}\). This is the stiff failure mode, not a large truncation error on a bounded orbit.}
+\label{fig:blow}
+\end{figure}
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.82\textwidth]{\figdir/fig02_mass.png}
+\caption{Mass defect of implicit Euler, \(h=0.1\). The defect sits at round-off, as expected for a linear invariant when the stage equation is solved tightly. An inaccurate solution can still conserve the sum; compare Figure~\ref{fig:ieorder} before claiming correctness.}
+\label{fig:mass}
+\end{figure}
+
+\subsection{Adaptivity}
+With \(h_0=0.1\) and \(\mathrm{tol}=2\times 10^{-6}\), the controller accepts \(749\) steps, rejects \(3\), reaches a smallest \(h=1.25\times 10^{-2}\), and returns to \(h=h_0\) by the end of the interval (Figure~\ref{fig:ht}, top). Terminal error versus the oracle is \(e_\infty=8.90\times 10^{-5}\), smaller than the fixed-\(h=0.1\) error \(3.48\times 10^{-4}\). The step size \emph{does} change; a relabelled fixed grid would not produce this \(h(t)\).
+
+The brief also asks whether the local error sits near the tolerance, not only whether \(h\) varies~\cite{problemPack}. Figure~\ref{fig:ht} (bottom) plots the accepted estimator \(e(t)=\|y_{\mathrm{fine}}-y_{\mathrm{coarse}}\|_\infty\). Every accepted \(e\) lies at or below \(\mathrm{tol}=2\times 10^{-6}\) (maximum \(1.13\times 10^{-6}\)); the median is \(3.22\times 10^{-7}\); and \(89.2\%\) of accepted steps fall in the keep-\(h\) band \([\mathrm{tol}/10,\mathrm{tol}]\). The three rejected attempts are exactly the controller's response when \(e\) would have exceeded \(\mathrm{tol}\). So \(h\) moves, and the local error tracks the tolerance rather than collapsing far below it.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.86\textwidth]{\figdir/fig08_adaptive_h.png}
+\caption{Step-doubling implicit Euler (\(h_0=0.1\), \(\mathrm{tol}=2\times 10^{-6}\)). Top: accepted \(h(t)\) shrinks through the early transient and grows back to \(h_0\). Bottom: accepted local error \(e(t)\) stays at or below \(\mathrm{tol}\) and mostly in \([\mathrm{tol}/10,\mathrm{tol}]\). \(749\) steps accepted, \(3\) rejected.}
+\label{fig:ht}
+\end{figure}
+
+\subsection{Positivity (separate from conservation and from \(E(h)\))}
+\label{sec:pos}
+Robertson concentrations are physically nonnegative. Implicit Euler has no positivity theorem: a large implicit step on other kinetics can cross through zero while still conserving \(1^\top y\). I therefore measured \(\min_{t>0}y_2\) on the raw method (no limiter) for \(h\in\{0.05,0.1,0.2,0.4,0.8,2,5,10\}\). After the initial state \(y_2(0)=0\), every accepted value stayed positive; the smallest post-initial entry at the working step \(h=0.1\) is \(9.199\times 10^{-6}\), and even at \(h=10\) one has \(\min_{t>0}y_2=1.035\times 10^{-5}\) with \(n_{\mathrm{neg}}=0\). Newton trial states on the first step also stayed at or above zero (the minimum iterate is the initial guess \(w_2=0\)).
+
+I still coded two empirical repairs, and I state the limitation in the same sentence: \textbf{neither has a convergence guarantee}.
+\begin{itemize}[leftmargin=1.2em]
+  \item \emph{Clip:} replace a negative component by \(0\) after the Newton update. This does not restore mass, so it can break the linear invariant that implicit Euler otherwise holds to round-off.
+  \item \emph{Reject:} abort the step if the accepted state or any Newton iterate is negative.
+\end{itemize}
+On this IVP both rules are no-ops: clip never changes a component, and reject never fires, through \(h=10\). That is an observation, not a proof. A write-up that treated clip as a positivity-preserving scheme would be claiming a theorem the method does not have. I therefore leave the production integrator unclipped, report \(\min y_2\) in Table~\ref{tab:rob}, and keep positivity out of the \(E(h)\) column.
+
+\subsection{Main results and cost--accuracy}
+\label{sec:cost}
+The central question is whether implicit Euler is worth its Newton cost on this stiff IVP. I name the cost measure first: \textbf{right-hand-side evaluations} accumulated during Newton residual computations. I do \emph{not} count Jacobian assembly, dense linear solves, Python overhead, or plotting, and I hold those exclusions fixed across methods.
+
+Figure~\ref{fig:cost} plots \(e_\infty(40)\) against that cost. Fixed-step implicit Euler at \(h=0.05\) reaches \(e_\infty=1.74\times 10^{-4}\) with \(2424\) RHS calls. Adaptive stepping at \(\mathrm{tol}=5\times 10^{-5}\) reaches the same error with \(3680\) RHS calls (\(400\) accepted steps). Tighter adaptive tolerances spend even more: \(\mathrm{tol}=2\times 10^{-6}\) uses \(6835\) evaluations for \(e_\infty=8.90\times 10^{-5}\). The method I expected to win on work \emph{did not}: each accepted adaptive step costs three implicit Euler solves, so step-doubling is a reliability mechanism, not a cheaper integrator, once a good fixed \(h\) is already known. Wall-clock on this machine was \(0.04\,\mathrm{s}\) versus \(0.03\,\mathrm{s}\) for that matched-error pair; I do not treat wall-clock as the primary cost because it is hardware-dependent.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.82\textwidth]{\figdir/fig09_cost_accuracy.png}
+\caption{Learning-outcome D. Error at \(t=40\) versus RHS evaluations, matched against the same BDF oracle. The dotted line marks the matched accuracy \(e_\infty\approx 1.74\times 10^{-4}\). Adaptive step-doubling lies to the right of the fixed-\(h\) curve: more work at a given accuracy. The conclusion is reported because the measurement went that way, not because I hoped it would.}
+\label{fig:cost}
+\end{figure}
+
+\subsection{Limitations and robustness}
+The \(h\lambda\) picture is frozen at one state. During the first \(10^{-4}\) time units the Jacobian is nearly degenerate and Newton residuals rise before they fall; a code that stops on residual increase would abort a correct solve. Section~\ref{sec:pos} shows that \(y_2\) did not go negative on this IVP, even at \(h=10\); that observation is not a positivity theorem, and the clip/reject repairs I tried have no convergence guarantee. Step-doubling assumes a smooth error expansion \(\tau\approx C h^{2}\), which holds here but would fail across a non-smooth right-hand side. I did not implement a positivity-preserving scheme or a Rosenbrock method; those remain the natural extensions.
+
+%----------------------------------------------------------------------
+\section{Conclusions}
+\label{sec:conc}
+\begin{itemize}[leftmargin=1.2em]
+  \item I solved Robertson's IVP with three one-step methods, an analytic Newton Jacobian, and a step-doubling controller, all checked against a BDF/Radau oracle that I tightened myself.
+  \item Observed orders match theory once \(h\) is in the asymptotic regime: Euler \(0.943\pm 0.015\), RK4 \(4.075\pm 0.018\), implicit Euler on Robertson \(0.990\pm 0.002\).
+  \item Conservation, positivity and full-state error are separate: mass sits at round-off, \(\min_{t>0}y_2>0\) on every tabulated \(h\), and \(E(h)\) is still \(\mathcal{O}(h)\). Clip and reject never fired; I do not claim a positivity theorem.
+  \item At \(h=0.1\), \(\|y(40;10^{-8})-y(40;10^{-12})\|_\infty=2.21\times 10^{-7}\) is far below the discretisation error \(3.48\times 10^{-4}\).
+  \item Adaptive stepping accepts \(749\) steps, rejects \(3\), and keeps \(89\%\) of local errors in \([\mathrm{tol}/10,\mathrm{tol}]\). At matched \(y(40)\) error it still spends more RHS evaluations than a tuned fixed step.
+  \item A-stability, a small Newton residual, and mass conservation are not accuracy claims; the evidence for accuracy is the refined oracle comparison.
+\end{itemize}
+
+\begin{thebibliography}{13}
+\bibitem{robertson1966}
+H.~H. Robertson, ``The solution of a set of reaction rate equations,'' in \emph{Numerical Analysis: An Introduction}, J.~Walsh, Ed.\ London: Academic Press, 1966.
+\bibitem{hairer1993}
+E.~Hairer, S.~P.\ N{\o}rsett and G.~Wanner, \emph{Solving Ordinary Differential Equations I}, 2nd~ed.\ Berlin: Springer, 1993.
+\bibitem{hairer1996}
+E.~Hairer and G.~Wanner, \emph{Solving Ordinary Differential Equations II}, 2nd~ed.\ Berlin: Springer, 1996.
+\bibitem{butcher2016}
+J.~C. Butcher, \emph{Numerical Methods for Ordinary Differential Equations}, 3rd~ed.\ Chichester: Wiley, 2016.
+\bibitem{scipy2020}
+P.~Virtanen et al., ``SciPy 1.0: fundamental algorithms for scientific computing in Python,'' \emph{Nature Methods}, vol.~17, pp.~261--272, 2020.
+\bibitem{problemPack}
+Course problem pack, ``Chemical kinetics: Robertson problem,'' Project~1, Numerical Analysis of ODEs and PDEs, 2026.
+\bibitem{numpy}
+C.~R. Harris et al., ``Array programming with NumPy,'' \emph{Nature}, vol.~585, pp.~357--362, 2020.
+\bibitem{zhang2026tickets}
+H.~Zhang, ``Feedback on Issue Tickets,'' MTH321 forum announcement, 27~September 2026.
+\bibitem{feedbackslides}
+H.~Zhang, ``Classroom feedback: recurring difficulties'' (Week~2 issue tickets), course slides, September 2026.
+\bibitem{tutorial3supp}
+Course handout, ``Tutorial 3: scientific visualization'' (supplement), September 2026.
+\bibitem{radauhandout}
+Course handout, ``Radau methods for ODE systems,'' September 2026.
+\end{thebibliography}
+
+\appendix
+\section{AI Transparency Log}
+\subsection{A1. Tools used}
+\begin{center}
+\begin{tabular}{@{}llp{0.58\textwidth}@{}}
+\toprule
+Tool & Date & Primary use\\
+\midrule
+Cursor (Grok 4.6 agent) & 15--21 Sep 2026 & Scaffold interpretation, Newton/backtracking
+explanation, experiment scripts, first \LaTeX\ draft\\
+Cursor (Grok 4.6 agent) & 27 Sep 2026 & Week-4 materials pass, ICS wording, Overleaf packaging\\
+Cursor (Grok 4.6 agent) & 5 Oct 2026 & Positivity / Newton-tolerance / adaptive \(e(t)\) experiments,
+first-person unification, git history\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{A2--A3. Claim audits}
+
+\paragraph{Item 1: analytic Robertson Jacobian.}
+Prompt/claim: fill \(J_f\) from the three-term RHS, including the \(6\times 10^7 y_2\) off-diagonals.
+Risk: a diagonal-only Jacobian drops the chemistry and still produces a ``running'' solver.
+Independent check: central finite differences at \(y=(0.9,10^{-5},0.1)\), \(\max|J_{\mathrm{an}}-J_{\mathrm{FD}}|=3.2\times 10^{-12}\); column sums of \(J_f\) equal \(0\) to machine precision (\texttt{run\_all.py} log; Figure~\ref{fig:mass} is the integrated counterpart).
+Decision: keep the analytic Jacobian; reject any AI/edit that fills only the diagonal.
+
+\paragraph{Item 2: adaptive step-doubling cost.}
+Prompt/claim: ``adaptive stepping should be cheaper than a fixed grid.''
+Risk: counting accepted steps instead of RHS evaluations hides the three-solve estimator.
+Independent check: Figure~\ref{fig:cost} and the printed lines \texttt{n\_rhs=2424} (fixed \(h=0.05\)) versus \texttt{n\_rhs=3680} (adaptive, same \(e_\infty\)).
+Decision: report the negative result; name the cost as RHS evaluations; do not claim a speed-up.
+
+\paragraph{Item 3: first Newton residual rise.}
+Prompt/claim: a rising residual means a wrong \(J_F\) or a failed solve.
+Risk: ``debugging'' a correct basin-of-attraction effect.
+Independent check: first-step trace at \(t=0.1\), \(h=0.1\): \(\|F\|_\infty\) sequence \(4.0\times 10^{-3},\ 4.8\times 10^{1},\ \ldots,\ 5.6\times 10^{-17}\), matching the Week-2 scaffold comment that \(y_2=0\) is degenerate.
+Decision: keep the undamped Newton start; document the spike as expected.
+
+\subsection{A4. Ownership}
+I own: \texttt{robertson\_rhs}, \texttt{robertson\_jacobian}, Euler/RK4/Newton/step-doubling, the oracle protocol, the positivity and Newton-tolerance sweeps, and every figure in \texttt{figures/}.
+Trusted dependency: \(\mathtt{numpy.linalg.solve}\) for the Newton correction; \(\mathtt{scipy.integrate.solve\_ivp}\) only as an independent reference (BDF/Radau, stated tolerances). I can explain and modify these methods without AI during the viva.
+
+\section{Individual Contribution Statement}
+This is a solo project, so there is one ICS.
+
+\noindent\textbf{Individual Contribution Statement --- Project 1 (ODE IVP)}\\
+Name: Chuyang Wang \qquad Student number: 2363591\\
+Role this project: sole author (implementation, weekly tasks, report).
+
+The specific things I did this project:
+\begin{enumerate}[leftmargin=1.2em]
+  \item Implemented \texttt{robertson\_rhs}, \texttt{robertson\_jacobian}, Euler, RK4, \texttt{newton\_implicit\_euler} and \texttt{adaptive\_implicit\_euler} in \texttt{code/model.py} and \texttt{code/methods.py}.
+  \item Completed the weekly issue tickets and individual challenges, including the Week-2 RC-diode \(h_{\max}\) pair (\(0.2\,\mathrm{ms}\to 20\,\mathrm{ms}\)) and the Week-3 before/after log-log convergence figure (slope \(0.943\pm 0.015\)).
+  \item Built the BDF/Radau oracle, wrote \texttt{validation\_tests.py}, and regenerated all report figures with \texttt{python code/run\_all.py}.
+  \item Added the positivity probe (clip / reject, no convergence claim), the Newton-tolerance sweep at \(h=0.1\), and the adaptive \(e(t)\) panel with accept/reject counts.
+  \item Wrote the full \LaTeX\ report: model, stability, Newton analysis, experiments, cost--accuracy comparison, AI Transparency Log and this ICS.
+\end{enumerate}
+What I would do differently: freeze the cost measure (RHS evaluations) before plotting Figure~\ref{fig:cost}, instead of discovering afterwards that adaptive stepping is more expensive than a tuned fixed step.
+Anything I should have asked for help with earlier: whether a rising Newton residual on the first Robertson step (\(y_2=0\)) is expected, before treating it as a Jacobian bug.
+Signature: \underline{\hspace{4cm}} \quad Date: \underline{\hspace{3cm}}
+
+\section{Supplementary data}
+Newton residuals on the first Robertson step (\(t=0.1\), \(h=0.1\)), \(\|F\|_\infty\):
+\[
+4.00\times 10^{-3},\;
+4.76\times 10^{1},\;
+1.19\times 10^{1},\;
+2.98,\;
+7.43\times 10^{-1},\;
+\ldots,\;
+5.55\times 10^{-17}
+\quad\text{(12 iterations).}
+\]
+Reproduced by \texttt{python code/run\_all.py} (block \texttt{[newton]}).
+
+\end{document}
