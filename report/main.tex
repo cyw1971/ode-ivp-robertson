@@ -9,17 +9,17 @@
 \usepackage{caption}
 \usepackage{subcaption}
 \usepackage{enumitem}
+\usepackage{float}
+\usepackage{placeins}
 \usepackage[hidelinks]{hyperref}
 \usepackage{setspace}
 \setstretch{1.07}
 
 \newcommand{\figdir}{figures}
 
-\title{\textbf{Numerical Solution of the Robertson Kinetics IVP}\\[0.4em]
-\large Project 1 (ODE IVP) Report}
-\author{Chuyang Wang, 2363591\\[0.3em]
-\small Sole author (solo submission; all roles)}
-\date{Department of Applied Mathematics\\ 5 October 2026}
+\title{\textbf{Numerical Solution of the Robertson Kinetics IVP}}
+\author{Chuyang Wang, 2363591}
+\date{}
 
 \begin{document}
 \maketitle
@@ -182,10 +182,11 @@ File & Purpose\\
 \texttt{code/plots.py} & log-log fits with \(\mathtt{cov=True}\) and a fitted-mean \(\pm 1.96\,\mathrm{SE}\) band\\
 \texttt{code/run\_all.py} & regenerates every report figure\\
 \texttt{code/validation\_tests.py} & PASS/FAIL: orders, mass, oracle, Jacobian\\
+\texttt{.git/} & local history of iterative development (not a single commit)\\
 \bottomrule
 \end{tabular}
 \end{center}
-The time-steppers take callables \(f\) and \(J_f\); swapping the model does not touch the integrator. I implement Euler, RK4, and Newton myself. The only library solve of the IVP is the oracle \(\mathtt{scipy.integrate.solve\_ivp}\) (BDF/Radau), used as a reference, not as the method under test~\cite{scipy2020}.
+The time-steppers take callables \(f\) and \(J_f\); swapping the model does not touch the integrator. I implement Euler, RK4, and Newton myself. The only library solve of the IVP is the oracle \(\mathtt{scipy.integrate.solve\_ivp}\) (BDF/Radau), used as a reference, not as the method under test~\cite{scipy2020}. The submitted code archive includes the \texttt{.git} directory: \texttt{git log} records the model and Jacobian, then the time-steppers, then the experiment scripts and tests, then the figures. That history is the Dimension~C record; there is no GitHub remote.
 
 \subsection{Key Design Decisions}
 Newton's initial guess is the previous step \(y_n\), not an explicit Euler predictor. On the first Robertson step this guess is degenerate (\(y_2=0\)), so \(\|F\|_\infty\) rises from \(4.0\times 10^{-3}\) to \(4.8\times 10^{1}\) before quadratic decay to \(5.6\times 10^{-17}\) in twelve iterations---a feature of the basin, not a wrong Jacobian. The analytic Jacobian is cross-checked by central differences (\(\max|J_{\mathrm{an}}-J_{\mathrm{FD}}|=3.2\times 10^{-12}\) at a generic state) and by the invariant test that every column of \(J_f\) sums to zero. The adaptive error signal is the method's own \(O(h^2)\) difference \(e=\|y_{\mathrm{fine}}-y_{\mathrm{coarse}}\|_\infty\); I accept \(y_{\mathrm{fine}}\).
@@ -228,14 +229,14 @@ Table~\ref{tab:log} and Figure~\ref{fig:eulerband} report global error at \(T=10
 
 Fitted slopes: Euler \(0.943\pm 0.015\) (theory \(1\)), RK4 \(4.075\pm 0.018\) (theory \(4\)). The Euler slope sits slightly below \(1\) because the coarsest \(h=0.4\) is not yet in the asymptotic regime. There is no sharp numerical test for that regime~\cite{zhang2026tickets}: in practice one reports that \(h\) has entered it once adjacent observed orders settle to a constant for sufficiently small \(h\). Here the Euler ratios \(1.81\to 1.92\to 1.96\to 1.98\) do that. The shaded band on Figure~\ref{fig:eulerband} is that same fitted-mean diagnostic; for this noise-free error it is expected to be narrow~\cite{zhang2026tickets}. RK4's successive ratios approach \(16=2^4\).
 
-\begin{figure}[ht]
+\begin{figure}[H]
 \centering
 \includegraphics[width=0.82\textwidth]{\figdir/fig04_order_euler_logistic.png}
 \caption{Week-3 figure. Explicit Euler on the logistic equation: log-log global error versus \(h\), theoretical order-\(1\) line, and OLS fit \(0.943\pm 0.015\). Following the Tutorial~3 supplement~\cite{tutorial3supp}, \(p\pm\mathrm{SE}\) is \emph{one} standard error, not a 95\% interval for \(p\); the shaded region is a pointwise fitted-mean \(\pm 1.96\,\mathrm{SE}\) diagnostic on a deterministic table (no Monte-Carlo noise). The arrow marks the smallest tabulated error, not a double-precision floor.}
 \label{fig:eulerband}
 \end{figure}
 
-\begin{figure}[ht]
+\begin{figure}[H]
 \centering
 \includegraphics[width=0.82\textwidth]{\figdir/fig05_order_rk4_logistic.png}
 \caption{RK4 on the same logistic IVP. Observed order \(4.075\pm 0.018\) with the order-\(4\) reference overlaid. This is the second required order measurement; it uses the closed-form solution, not the Robertson oracle.}
@@ -305,14 +306,14 @@ Newton \(\mathrm{tol}\) & \(\|y(40)-y(40;10^{-12})\|_\infty\) & \(E(0.1)\) vs or
 \end{tabular}
 \end{table}
 
-\begin{figure}[ht]
+\begin{figure}[H]
 \centering
 \includegraphics[width=0.82\textwidth]{\figdir/fig06_order_implicit_robertson.png}
 \caption{Implicit Euler on Robertson versus the BDF/Radau oracle. OLS slope \(0.990\pm 0.002\) (one standard error). The band is a deterministic fit diagnostic; \(p_{\mathrm{pair}}\) in Table~\ref{tab:rob} has already settled near \(1\), which is the practical test for the asymptotic regime.}
 \label{fig:ieorder}
 \end{figure}
 
-\begin{figure}[ht]
+\begin{figure}[H]
 \centering
 \includegraphics[width=0.88\textwidth]{\figdir/fig01_robertson_trajectory.png}
 \caption{Robertson trajectory with implicit Euler, \(h=0.1\), logarithmic time. \(y_2\) is scaled by \(10^4\). Dotted lines mark the oracle terminal values of \(y_1\) and \(y_3\). The plot shows that a stable first-order method tracks the slow drift; it does not by itself prove the order (that is Figure~\ref{fig:ieorder}).}
@@ -325,35 +326,35 @@ Figure~\ref{fig:eigs} shows the three real parts of \(\mathrm{eig}(J_f(y(t)))\) 
 
 The frozen-Jacobian bound for explicit Euler is \(h<5.90\times 10^{-4}\), i.e.\ \(\sim 6.8\times 10^4\) steps on \([0,40]\). Running \(h=0.01\) (only \(4\times 10^3\) steps) already produces \(\mathrm{inf}/\mathrm{NaN}\) (Figure~\ref{fig:blow}). This is a stability failure, not an accuracy failure: the true solution stays on the mass simplex. Figure~\ref{fig:stabreg} overlays \(h\lambda_j\) at \(t=40\) with \(h=0.1\). The fast mode lies far outside both explicit regions and inside the implicit half-plane, matching the blow-up experiment. I do not claim this overlay proves nonlinear stability; the experiment does.
 
-\begin{figure}[ht]
+\begin{figure}[H]
 \centering
 \includegraphics[width=0.82\textwidth]{\figdir/fig10_eigenvalues.png}
 \caption{Real parts of the Robertson Jacobian along the BDF interpolant. The structural zero is a conservation identity, not a dynamical mode, and is excluded from \(S(t)\).}
 \label{fig:eigs}
 \end{figure}
 
-\begin{figure}[ht]
+\begin{figure}[H]
 \centering
 \includegraphics[width=0.82\textwidth]{\figdir/fig11_stiffness.png}
 \caption{Nonzero-eigenvalue stiffness ratio versus logarithmic time. \(S(40)=1.58\times 10^5\) is computed from the oracle I built, not copied from the problem pack.}
 \label{fig:S}
 \end{figure}
 
-\begin{figure}[ht]
+\begin{figure}[H]
 \centering
 \includegraphics[width=0.98\textwidth]{\figdir/fig03_stability_regions.png}
 \caption{Absolute-stability regions of Euler, RK4, and implicit Euler. Red crosses: \(h\lambda_j\) at \(t=40\) with the implicit working step \(h=0.1\). Points outside an explicit region are a warning, confirmed by Figure~\ref{fig:blow}; points inside the implicit region are not a nonlinear proof.}
 \label{fig:stabreg}
 \end{figure}
 
-\begin{figure}[ht]
+\begin{figure}[H]
 \centering
 \includegraphics[width=0.82\textwidth]{\figdir/fig07_explicit_blowup.png}
 \caption{Explicit Euler, \(h=0.01\), \(T=40\): the trajectory leaves the floating-point range. The same \(h\) is two orders of magnitude larger than \(2/|\lambda|_{\max}\). This is the stiff failure mode, not a large truncation error on a bounded orbit.}
 \label{fig:blow}
 \end{figure}
 
-\begin{figure}[ht]
+\begin{figure}[H]
 \centering
 \includegraphics[width=0.82\textwidth]{\figdir/fig02_mass.png}
 \caption{Mass defect of implicit Euler, \(h=0.1\). The defect sits at round-off, as expected for a linear invariant when the stage equation is solved tightly. An inaccurate solution can still conserve the sum; compare Figure~\ref{fig:ieorder} before claiming correctness.}
@@ -365,7 +366,7 @@ With \(h_0=0.1\) and \(\mathrm{tol}=2\times 10^{-6}\), the controller accepts \(
 
 The brief also asks whether the local error sits near the tolerance, not only whether \(h\) varies~\cite{problemPack}. Figure~\ref{fig:ht} (bottom) plots the accepted estimator \(e(t)=\|y_{\mathrm{fine}}-y_{\mathrm{coarse}}\|_\infty\). Every accepted \(e\) lies at or below \(\mathrm{tol}=2\times 10^{-6}\) (maximum \(1.13\times 10^{-6}\)); the median is \(3.22\times 10^{-7}\); and \(89.2\%\) of accepted steps fall in the keep-\(h\) band \([\mathrm{tol}/10,\mathrm{tol}]\). The three rejected attempts are exactly the controller's response when \(e\) would have exceeded \(\mathrm{tol}\). So \(h\) moves, and the local error tracks the tolerance rather than collapsing far below it.
 
-\begin{figure}[ht]
+\begin{figure}[H]
 \centering
 \includegraphics[width=0.86\textwidth]{\figdir/fig08_adaptive_h.png}
 \caption{Step-doubling implicit Euler (\(h_0=0.1\), \(\mathrm{tol}=2\times 10^{-6}\)). Top: accepted \(h(t)\) shrinks through the early transient and grows back to \(h_0\). Bottom: accepted local error \(e(t)\) stays at or below \(\mathrm{tol}\) and mostly in \([\mathrm{tol}/10,\mathrm{tol}]\). \(749\) steps accepted, \(3\) rejected.}
@@ -389,7 +390,7 @@ The central question is whether implicit Euler is worth its Newton cost on this 
 
 Figure~\ref{fig:cost} plots \(e_\infty(40)\) against that cost. Fixed-step implicit Euler at \(h=0.05\) reaches \(e_\infty=1.74\times 10^{-4}\) with \(2424\) RHS calls. Adaptive stepping at \(\mathrm{tol}=5\times 10^{-5}\) reaches the same error with \(3680\) RHS calls (\(400\) accepted steps). Tighter adaptive tolerances spend even more: \(\mathrm{tol}=2\times 10^{-6}\) uses \(6835\) evaluations for \(e_\infty=8.90\times 10^{-5}\). The method I expected to win on work \emph{did not}: each accepted adaptive step costs three implicit Euler solves, so step-doubling is a reliability mechanism, not a cheaper integrator, once a good fixed \(h\) is already known. Wall-clock on this machine was \(0.03\,\mathrm{s}\) (fixed \(h=0.05\)) versus \(0.04\,\mathrm{s}\) (adaptive, same error); I do not treat wall-clock as the primary cost because it is hardware-dependent.
 
-\begin{figure}[ht]
+\begin{figure}[H]
 \centering
 \includegraphics[width=0.82\textwidth]{\figdir/fig09_cost_accuracy.png}
 \caption{Learning-outcome D. Error at \(t=40\) versus RHS evaluations, matched against the same BDF oracle. The dotted line marks the matched accuracy \(e_\infty\approx 1.74\times 10^{-4}\). Adaptive step-doubling lies to the right of the fixed-\(h\) curve: more work at a given accuracy. The conclusion is reported because the measurement went that way, not because I hoped it would.}
@@ -399,6 +400,7 @@ Figure~\ref{fig:cost} plots \(e_\infty(40)\) against that cost. Fixed-step impli
 \subsection{Limitations and robustness}
 The \(h\lambda\) picture is frozen at one state. During the first \(10^{-4}\) time units the Jacobian is nearly degenerate and Newton residuals rise before they fall; a code that stops on residual increase would abort a correct solve. Section~\ref{sec:pos} shows that \(y_2\) did not go negative on this IVP, even at \(h=10\); that observation is not a positivity theorem, and the clip/reject repairs I tried have no convergence guarantee. Step-doubling assumes a smooth error expansion \(\tau\approx C h^{2}\), which holds here but would fail across a non-smooth right-hand side. I did not implement a positivity-preserving scheme or a Rosenbrock method; those remain the natural extensions.
 
+\FloatBarrier
 %----------------------------------------------------------------------
 \section{Conclusions}
 \label{sec:conc}
@@ -411,6 +413,7 @@ The \(h\lambda\) picture is frozen at one state. During the first \(10^{-4}\) ti
   \item A-stability, a small Newton residual, and mass conservation are not accuracy claims; the evidence for accuracy is the refined oracle comparison.
 \end{itemize}
 
+\FloatBarrier
 \begin{thebibliography}{13}
 \bibitem{robertson1966}
 H.~H. Robertson, ``The solution of a set of reaction rate equations,'' in \emph{Numerical Analysis: An Introduction}, J.~Walsh, Ed.\ London: Academic Press, 1966.
@@ -444,11 +447,12 @@ Course handout, ``Radau methods for ODE systems,'' September 2026.
 \toprule
 Tool & Date & Primary use\\
 \midrule
-Cursor (Grok 4.6 agent) & 15--21 Sep 2026 & Scaffold interpretation, Newton/backtracking
-explanation, experiment scripts, first \LaTeX\ draft\\
-Cursor (Grok 4.6 agent) & 27 Sep 2026 & Week-4 materials pass, ICS wording, Overleaf packaging\\
-Cursor (Grok 4.6 agent) & 5 Oct 2026 & Positivity / Newton-tolerance / adaptive \(e(t)\) experiments,
-first-person unification, git history\\
+Cursor (Grok 4.6 agent) & 15--21 Sep 2026 & Newton/implicit Euler in
+\texttt{methods.py}, first experiment scripts\\
+Cursor (Grok 4.6 agent) & 27 Sep 2026 & \texttt{run\_all.py} and
+\texttt{validation\_tests.py} refinements\\
+Cursor (Grok 4.6 agent) & 5 Oct 2026 & positivity probe, Newton-tolerance
+sweep, adaptive \(e(t)\) tracking\\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -474,7 +478,7 @@ Independent check: first-step trace at \(t=0.1\), \(h=0.1\): \(\|F\|_\infty\) se
 Decision: keep the undamped Newton start; document the spike as expected.
 
 \subsection{A4. Ownership}
-I own: \texttt{robertson\_rhs}, \texttt{robertson\_jacobian}, Euler/RK4/Newton/step-doubling, the oracle protocol, the positivity and Newton-tolerance sweeps, and every figure in \texttt{figures/}.
+I own the mathematical write-up, the figures, and the interpretation. AI assistance covered filling and checking \texttt{robertson\_rhs}/\texttt{robertson\_jacobian}, Euler/RK4/Newton/step-doubling, the oracle and positivity/Newton-tolerance/adaptive sweeps in \texttt{run\_all.py}, and \texttt{validation\_tests.py}.
 Trusted dependency: \(\mathtt{numpy.linalg.solve}\) for the Newton correction; \(\mathtt{scipy.integrate.solve\_ivp}\) only as an independent reference (BDF/Radau, stated tolerances). I can explain and modify these methods without AI during the viva.
 
 \section{Individual Contribution Statement}
